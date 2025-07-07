@@ -233,6 +233,74 @@ class ItemEditor(QWidget):
             item["ID"] = i
             self.data.append(item)
 
+    def import_icon(self):
+        idx = self.selected_index
+        if idx < 0 or idx >= len(self.data):
+            QMessageBox.warning(self, "No Item", "Please select an item first.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(self, "Import PNG Icon", "", "PNG Images (*.png)")
+        if not file_path:
+            return
+
+        from PIL import Image
+
+        try:
+            img = Image.open(file_path)
+            if img.size != (24, 24):
+                QMessageBox.critical(self, "Invalid Size", "Image must be exactly 24x24 pixels.")
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not open image: {e}")
+            return
+
+        item_id = self.data[idx].get("ID")
+        tile_symbol, pal_symbol = self.graphics_table.get(item_id, ("", ""))
+        if not tile_symbol or not pal_symbol:
+            QMessageBox.warning(self, "No Symbols", f"Graphics symbols not found for item ID {item_id}")
+            return
+
+        base_symbol = tile_symbol
+        if base_symbol.endswith("Tiles"):
+            base_symbol = base_symbol[:-5]
+
+        dest_path = os.path.join(self.icon_folder, f"{base_symbol}.png")
+        try:
+            os.makedirs(self.icon_folder, exist_ok=True)
+            img.save(dest_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save image: {e}")
+            return
+
+        self.icon_map[base_symbol] = dest_path
+        self.load_item_into_fields(idx)
+        self.update_item_tables_header(tile_symbol, pal_symbol)
+        QMessageBox.information(self, "Imported", f"Icon for {base_symbol} updated.")
+
+    def update_item_tables_header(self, tile_sym, pal_sym):
+        if not os.path.exists(self.table_h_path):
+            return
+
+        with open(self.table_h_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        defines = [
+            rf"#define\s+{tile_sym}\s+\(\(u32\*\).+?\)",
+            rf"#define\s+{pal_sym}\s+\(\(u32\*\).+?\)",
+        ]
+
+        # Convert to extern if defined
+        changed = False
+        for sym in [tile_sym, pal_sym]:
+            pattern = rf"#define\s+{sym}\s+\(\(u32\*\).+?\)"
+            if re.search(pattern, content):
+                content = re.sub(pattern, f"extern const u32 {sym}[];", content)
+                changed = True
+
+        if changed:
+            with open(self.table_h_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
     # next part: UI setup, search, and 13-char enforcement...
     def init_ui(self):
         self.setMinimumSize(1200, 700)
@@ -290,6 +358,10 @@ class ItemEditor(QWidget):
         self.save_btn = QPushButton("💾 Save All Changes")
         self.save_btn.clicked.connect(self.save_all)
         right_layout.addWidget(self.save_btn)
+
+        self.import_icon_btn = QPushButton("📁 Import Icon (PNG)")
+        self.import_icon_btn.clicked.connect(self.import_icon)
+        right_layout.addWidget(self.import_icon_btn)
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
