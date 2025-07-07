@@ -126,6 +126,7 @@ class ItemEditor(QWidget):
         self.headers = ["Name", "Price", "HoldEffect", "HoldParam", "Pocket", "Type", "Desc"]
         self.extra_fields = ["Importance", "Unk19", "FieldUseFunc", "BattleUsage", "BattleUseFunc", "SecondaryId"]
         self.readonly_tags = set()
+        self.original_rom_defined = set()  # ⬅️ track all DESC_ originally ROM-defined
         self.descriptions = {}
         self.icon_map = {}
         self.graphics_table = {}
@@ -176,7 +177,9 @@ class ItemEditor(QWidget):
                 if "#define DESC_" in line and "(const u8 *)" in line:
                     m = re.match(r"#define\s+(DESC_\w+)", line)
                     if m:
-                        self.readonly_tags.add(m.group(1))
+                        tag = m.group(1)
+                        self.readonly_tags.add(tag)
+                        self.original_rom_defined.add(tag)
         tag = None
         lines = []
         with open(self.description_path, "r", encoding="utf-8-sig") as f:
@@ -301,6 +304,24 @@ class ItemEditor(QWidget):
             with open(self.table_h_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
+    def update_desc_define_to_extern(self, desc_tag):
+        if not os.path.exists(self.table_h_path):
+            return
+
+        with open(self.table_h_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        pattern = rf"#define\s+{desc_tag}\s+\(\(const u8 \*\)[^\)]+\)"
+        replacement = f"extern const u8 {desc_tag}[];"
+
+        if re.search(pattern, content):
+            content = re.sub(pattern, replacement, content)
+
+            with open(self.table_h_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            self.readonly_tags.remove(desc_tag)
+
     def on_item_selected(self, current, previous):
         if not current:
             return
@@ -401,7 +422,20 @@ class ItemEditor(QWidget):
         desc_tag = item.get("Desc", "")
         desc = self.descriptions.get(desc_tag, "[ROM defined]")
         self.desc_edit.setText(desc)
-        self.desc_edit.setReadOnly(desc_tag in self.readonly_tags)
+        if desc_tag in self.readonly_tags:
+            answer = QMessageBox.question(
+                self,
+                "Unlock Description?",
+                f"This description is ROM-defined ({desc_tag}).\nDo you want to make it editable?\n(Note: It will only be changed in files if you modify it)",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if answer == QMessageBox.Yes:
+                # Just make it editable now; defer the extern patch to save_all()
+                self.desc_edit.setReadOnly(False)
+            else:
+                self.desc_edit.setReadOnly(True)
+        else:
+            self.desc_edit.setReadOnly(False)
 
         tile_symbol, _ = self.graphics_table.get(idx, ("", ""))
         icon_key = tile_symbol[:-5] if tile_symbol.endswith("Tiles") else tile_symbol
@@ -435,8 +469,17 @@ class ItemEditor(QWidget):
             if self.selected_index >= 0:
                 item = self.data[self.selected_index]
                 tag = item.get("Desc", "")
-                if tag and tag not in self.readonly_tags:
-                    self.descriptions[tag] = self.desc_edit.toPlainText().strip()
+                if tag:
+                    current_text = self.desc_edit.toPlainText().strip()
+                    original_text = self.descriptions.get(tag, "").strip()
+
+                    if tag in self.original_rom_defined and tag in self.readonly_tags:
+                        if current_text != original_text:
+                            self.update_desc_define_to_extern(tag)
+                            self.readonly_tags.discard(tag)
+
+                    if tag not in self.readonly_tags:
+                        self.descriptions[tag] = current_text
 
         for idx, item in enumerate(self.data):
             name = item['Name'][:13]
