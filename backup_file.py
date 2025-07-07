@@ -301,6 +301,12 @@ class ItemEditor(QWidget):
             with open(self.table_h_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
+    def on_item_selected(self, current, previous):
+        if not current:
+            return
+        real_idx = current.data(Qt.UserRole)
+        self.load_item_into_fields(real_idx)
+
     # next part: UI setup, search, and 13-char enforcement...
     def init_ui(self):
         self.setMinimumSize(1200, 700)
@@ -321,9 +327,11 @@ class ItemEditor(QWidget):
             item_id = item.get("ID", 0)
             raw_name = self.item_id_to_name.get(item_id, f"ITEM_{item_id:03}")
             display = raw_name.replace("ITEM_", "").replace("_END", "").replace("_", " ")
-            QListWidgetItem(item.get("Name", f"ITEM_{item_id:03}"), self.list_widget)
-            self.list_widget.currentRowChanged.connect(self.load_item_into_fields)
+            list_item = QListWidgetItem(item.get("Name", f"ITEM_{item_id:03}"))
+            list_item.setData(Qt.UserRole, item_id)
+            self.list_widget.addItem(list_item)
             left_layout.addWidget(self.list_widget)
+        self.list_widget.currentItemChanged.connect(self.on_item_selected)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
 
@@ -376,7 +384,9 @@ class ItemEditor(QWidget):
         for item in self.data:
             name = item.get("Name", "")
             if text in name.lower():
-                QListWidgetItem(name, self.list_widget)
+                list_item = QListWidgetItem(name)
+                list_item.setData(Qt.UserRole, item["ID"])  # Store real index
+                self.list_widget.addItem(list_item)
 
     def load_item_into_fields(self, idx):
         if idx < 0 or idx >= len(self.data):
