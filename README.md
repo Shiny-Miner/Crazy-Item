@@ -1,2 +1,2 @@
 # Crazy-Item
-Decomps style Item editor CFRYU Expansion!
+Decomps style Item editor CFRU Expansion!
