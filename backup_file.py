@@ -1,22 +1,10 @@
-# ✅ FINAL DANGER.PY - Based on original master.py
-# Includes:
-# - All original logic preserved (load_item_defines, graphics table, icon logic)
-# - Extra gItemData fields editable
-# - Search bar
-# - Description editing + saving
-# - Name input limited to 13 chars (14th is auto _END)
-# - Full dark theme and layout untouched
-
-# ⚠️ Large code file – will be regenerated in complete chunks
-# Please continue scrolling in next messages for full working script
-
 import sys
 import os
 import re
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
     QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog, QMessageBox,
-    QSplitter, QListWidgetItem, QScrollArea
+    QSplitter, QListWidgetItem, QScrollArea, QDialog, QComboBox
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
@@ -82,8 +70,8 @@ def encode_char_array(text):
 
     # Optional compression for symbol macros like Pokéblock → _PO, _KE, ...
     compress_map = {
-        "Pokeblock": ["_PO", "_KE", "_BL", "_OC", "_OK"],
-        "Pokéblock": ["_P", "_o", "_k", "_eACUTE", "_BL", "_OC", "_OK"]
+        "Pokeblock CAS": ["_PO", "_KE", "_BL", "_OC", "_OK", "SPACE", "_C", "_a", "s", "e"],
+        "Pokéblock CAS": ["_P", "_o", "_k", "_eACUTE", "_BL", "_OC", "_OK", "SPACE", "_C", "_a", "s", "e"]
     }
 
     for key in compress_map:
@@ -105,6 +93,75 @@ def encode_char_array(text):
             result = result[:13]
     result.append("_END")
     return ", ".join(result)
+
+class AddItemDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Add New Item")
+        self.setMinimumWidth(400)
+        layout = QVBoxLayout(self)
+
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Constant name (e.g., MY_ITEM)")
+        self.display_input = QLineEdit()
+        self.display_input.setPlaceholderText("Display name (max 13 chars)")
+        self.price_input = QLineEdit()
+        self.price_input.setPlaceholderText("Price (e.g., 200)")
+
+        self.pocket_combo = QComboBox()
+        self.pocket_combo.addItems([
+            "POCKET_ITEMS",
+            "POCKET_KEY_ITEMS",
+            "POCKET_POKE_BALLS",
+            "POCKET_TM_CASE",
+            "POCKET_BERRY_POUCH"
+        ])
+        self.type_combo = QComboBox()
+        self.type_combo.addItems([
+            "ITEM_USE_MAIL",
+            "ITEM_USE_PARTY_MENU",
+            "ITEM_USE_FIELD",
+            "ITEM_USE_PBLOCK_CASE",
+            "ITEM_USE_BAG_MENU",
+            "ITEM_USE_PARTY_MENU_MOVES"
+        ])
+
+        self.icon_btn = QPushButton("Choose 24x24 PNG Icon")
+        self.icon_path = QLabel("No icon selected")
+        self.icon_btn.clicked.connect(self.select_icon)
+
+        self.desc_edit = QTextEdit()
+        self.desc_edit.setPlaceholderText("Item description")
+
+        self.submit_btn = QPushButton("Create Item")
+        self.submit_btn.clicked.connect(self.accept)
+
+        for w in [
+            QLabel("Constant:"), self.name_input,
+            QLabel("Display Name:"), self.display_input,
+            QLabel("Price:"), self.price_input,
+            QLabel("Pocket:"), self.pocket_combo,
+            QLabel("Use Type:"), self.type_combo,
+            QLabel("Icon PNG:"), self.icon_btn, self.icon_path,
+            QLabel("Description:"), self.desc_edit, self.submit_btn
+        ]:
+            layout.addWidget(w)
+
+    def select_icon(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose Icon", "", "PNG (*.png)")
+        if path:
+            self.icon_path.setText(path)
+
+    def get_data(self):
+        return {
+            "const": self.name_input.text().strip().upper(),
+            "display": self.display_input.text().strip(),
+            "price": self.price_input.text().strip(),
+            "pocket": self.pocket_combo.currentText(),
+            "type": self.type_combo.currentText(),
+            "description": self.desc_edit.toPlainText().strip(),
+            "icon_path": self.icon_path.text().strip()
+        }
 
 class ItemEditor(QWidget):
     def __init__(self):
@@ -280,6 +337,187 @@ class ItemEditor(QWidget):
         self.update_item_tables_header(tile_symbol, pal_symbol)
         QMessageBox.information(self, "Imported", f"Icon for {base_symbol} updated.")
 
+    def add_item(self):
+        dialog = AddItemDialog(self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        data = dialog.get_data()
+        const_name = data["const"]
+        display = data["display"]
+        desc = data["description"]
+        price = data["price"]
+        pocket = data["pocket"]
+        use_type = data["type"]
+        icon_path = data["icon_path"]
+
+        if not (const_name and display and desc and price and icon_path):
+            QMessageBox.warning(self, "Missing Info", "All fields are required.")
+            return
+
+        # STEP 1: Assign next available ID from items.h
+        with open(self.items_h_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # Find the #define ITEMS_COUNT line
+        count_index = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("#define ITEMS_COUNT"):
+                count_index = i
+                break
+
+        if count_index is None:
+            QMessageBox.critical(self, "Error", "Could not find ITEMS_COUNT in items.h")
+            return
+
+        # Walk backwards to find the last real item ID
+        last_id = None
+        for j in range(count_index - 1, -1, -1):
+            match = re.search(r"#define\s+ITEM_\w+\s+(0x[0-9A-Fa-f]+)", lines[j])
+            if match:
+                last_id = int(match.group(1), 16)
+                break
+
+        if last_id is None:
+            QMessageBox.critical(self, "Error", "Could not parse previous item ID before ITEMS_COUNT")
+            return
+
+        new_id = last_id + 1
+
+        # Insert new define before ITEMS_COUNT
+        lines.insert(count_index, f"#define ITEM_{const_name} 0x{new_id:03X}\n")
+
+        
+        # ✅ Update ITEMS_COUNT line
+        lines[count_index + 1] = f"#define ITEMS_COUNT (ITEM_{const_name} + 1)\n"
+
+        # Save items.h
+        with open(self.items_h_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+
+        # STEP 2: Add externs to item_tables.h
+        externs = [
+            f"extern const u32 gBag_{const_name}Tiles[];\n",
+            f"extern const u32 gBag_{const_name}Pal[];\n",
+            f"extern const u8 DESC_{const_name}[];\n"
+        ]
+        with open(self.table_h_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        endif_index = None
+        for i, line in enumerate(lines):
+            if line.strip() == "#endif":
+                endif_index = i
+                break
+
+        if endif_index is not None:
+            for ext in reversed(externs):
+                lines.insert(endif_index, ext)
+
+            with open(self.table_h_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+        else:
+            QMessageBox.warning(self, "Warning", "#endif not found in item_tables.h. Appending at end.")
+            with open(self.table_h_path, "a", encoding="utf-8") as f:
+                f.writelines(externs)
+
+
+        # STEP 3: Add description
+        with open(self.description_path, "a", encoding="utf-8") as f:
+            f.write(f"\n#org @DESC_{const_name}\n{desc.strip()}\n")
+
+        from PIL import Image
+
+        # Build the output path
+        icon_filename = f"gBag_{const_name}.png"
+        icon_out = os.path.join(self.icon_folder, icon_filename)
+
+        try:
+            # Validate the image
+            img = Image.open(icon_path)
+            if img.size != (24, 24):
+                QMessageBox.critical(self, "Invalid Icon", "Icon must be exactly 24×24 pixels.")
+                return
+
+            # Ensure output folder exists
+            os.makedirs(self.icon_folder, exist_ok=True)
+
+            # Save validated image
+            img.save(icon_out)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Icon Copy Failed", f"Could not save icon:\n{e}")
+            return
+
+        # STEP 5: Patch gItemGraphicsTable (in .c file)
+        with open(self.item_tables_c_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # a. Insert into gItemGraphicsTable
+        # Find start of gItemGraphicsTable[][] block
+        gtable_match = re.search(r"gItemGraphicsTable\s*\[\s*ITEMS_COUNT\s*\+\s*1\s*\]\s*\[\s*2\s*\]\s*=\s*\{", content)
+        if gtable_match:
+            # Find first closing `};` after the match
+            start_index = gtable_match.end()
+            end_index = content.find("};", start_index)
+            if end_index == -1:
+                raise Exception("Could not find end of gItemGraphicsTable block")
+
+            graphic_entry = f"    {{ gBag_{const_name}Tiles, gBag_{const_name}Pal }},\n"
+            content = content[:end_index] + graphic_entry + content[end_index:]
+        else:
+            QMessageBox.warning(self, "Warning", "Could not find gItemGraphicsTable block in item_tables.c")
+
+        # b. Insert into gItemData[]
+        # Find start of gItemData[] block
+        gdata_match = re.search(r"const struct Item gItemData\[\]\s*=\s*\{", content)
+        if gdata_match:
+            # Find first closing `};` after the match
+            start_index = gdata_match.end()
+            end_index = content.find("};", start_index)
+            if end_index == -1:
+                raise Exception("Could not find end of gItemData block")
+
+            data_entry = f"""    [ITEM_{const_name}] = {{
+                .name = {{ {encode_char_array(display)} }},
+                .itemId = ITEM_{const_name},
+                .price = {price},
+                .description = DESC_{const_name},
+                .pocket = {pocket},
+                .type = {use_type},
+                .fieldUseFunc = NULL,
+                .battleUsage = 0,
+                .battleUseFunc = NULL,
+                .importance = 0,
+                .unk19 = 0,
+                .holdEffect = 0,
+                .holdEffectParam = 0,
+                .secondaryId = 0
+            }},\n"""
+            content = content[:end_index] + data_entry + content[end_index:]
+        else:
+            QMessageBox.warning(self, "Warning", "Could not find gItemData[] block in item_tables.c")
+
+
+        with open(self.item_tables_c_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        QMessageBox.information(self, "Item Added", f"{const_name} added as ID 0x{new_id:03X}")
+        # Refresh all data
+        self.data.clear()
+        self.item_blocks.clear()
+        self.descriptions.clear()
+        self.icon_map.clear()
+        self.graphics_table.clear()
+        self.item_id_to_name.clear()
+        self.readonly_tags.clear()
+        self.original_rom_defined.clear()
+
+        self.load_all()
+        self.filter_items("")
+        self.list_widget.setCurrentRow(len(self.data) - 1)
+
     def update_item_tables_header(self, tile_sym, pal_sym):
         if not os.path.exists(self.table_h_path):
             return
@@ -391,6 +629,10 @@ class ItemEditor(QWidget):
         self.import_icon_btn = QPushButton("📁 Import Icon (PNG)")
         self.import_icon_btn.clicked.connect(self.import_icon)
         right_layout.addWidget(self.import_icon_btn)
+
+        self.add_btn = QPushButton("➕ Add New Item")
+        self.add_btn.clicked.connect(self.add_item)
+        left_layout.addWidget(self.add_btn)
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
