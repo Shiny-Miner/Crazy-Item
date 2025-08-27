@@ -1,11 +1,11 @@
 # Crazy-Item
 Decomps style Item editor CFRU Expansion!
 
-[](Clipboard01.png)
+![](Clipboard01.png)
 
-[](Clipboard02.png)
+![](Clipboard02.png)
 
-[](Clipboard03.png)
+![](Clipboard03.png)
 
 Download available in #releases
 
