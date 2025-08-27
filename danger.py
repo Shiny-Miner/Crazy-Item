@@ -8,6 +8,15 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
+
+POCKET_OPTIONS = [
+    "POCKET_ITEMS",
+    "POCKET_KEY_ITEMS",
+    "POCKET_POKE_BALLS",
+    "POCKET_TM_CASE",
+    "POCKET_BERRY_POUCH"
+]
 
 def decode_char_array(array_text):
     punctuation_map = {
@@ -163,16 +172,72 @@ class AddItemDialog(QDialog):
             "icon_path": self.icon_path.text().strip()
         }
 
-class ItemEditor(QWidget):
+class CFRUSelectWindow(QWidget):
     def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Select CFRU Folder")
+        self.setGeometry(200, 200, 500, 200)
+
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
+
+        # CFRU controls
+        self.cfru_button = QPushButton("Select CFRU Folder")
+        self.cfru_label = QLabel("No CFRU folder chosen.")
+        self.layout.addWidget(self.cfru_button)
+        self.layout.addWidget(self.cfru_label)
+
+        # Continue
+        self.continue_button = QPushButton("Continue")
+        self.continue_button.setEnabled(False)
+        self.layout.addWidget(self.continue_button)
+
+        # signals
+        self.cfru_button.clicked.connect(self.select_cfru_folder)
+        self.continue_button.clicked.connect(self.open_editor)
+
+        self.cfru_folder_path = None
+
+    def select_cfru_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select CFRU Repository Folder")
+        if not folder:
+            return
+
+        item_tables = os.path.join(folder, "src", "tables", "item_tables.c")
+        items_h     = os.path.join(folder, "include", "constants", "items.h")
+
+        if all(os.path.exists(p) for p in (item_tables, items_h)):
+            self.cfru_folder_path = folder
+            self.cfru_label.setText(f"✅ CFRU Folder: {folder}")
+            self.continue_button.setEnabled(True)
+        else:
+            self.cfru_folder_path = None
+            self.cfru_label.setText("❌ Invalid CFRU folder. Missing item_tables.c or items.h")
+            self.continue_button.setEnabled(False)
+
+    def open_editor(self):
+        if not self.cfru_folder_path:
+            QMessageBox.warning(self, "Error", "A valid CFRU folder is required.")
+            return
+
+        # launch your Crazy Item editor
+        self.editor = ItemEditor(self.cfru_folder_path, parent_window=self)
+        self.editor.show()
+        self.hide()
+
+class ItemEditor(QWidget):
+    def __init__(self, base_path, parent_window = None):
         super().__init__()
         self.setWindowTitle("Crazy Item!")
         self.resize(1200, 800)
 
-        self.base_path = self.select_folder()
-        if not self.base_path:
-            sys.exit(0)
+        # set the icon everywhere
+        icon_path = os.path.join(os.path.dirname(__file__), "CrazyItem.ico")
+        self.setWindowIcon(QIcon(icon_path))
 
+        self.base_path = base_path
+        self.parent_window = parent_window
+        
         self.items_h_path = os.path.join(self.base_path, "include", "constants", "items.h")
         self.item_tables_c_path = os.path.join(self.base_path, "src", "tables", "item_tables.c")
         self.description_path = os.path.join(self.base_path, "strings", "item_descriptions.string")
@@ -589,8 +654,9 @@ class ItemEditor(QWidget):
             list_item = QListWidgetItem(item.get("Name", f"ITEM_{item_id:03}"))
             list_item.setData(Qt.UserRole, item_id)
             self.list_widget.addItem(list_item)
-            left_layout.addWidget(self.list_widget)
+        left_layout.addWidget(self.list_widget)
         self.list_widget.currentItemChanged.connect(self.on_item_selected)
+
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
 
@@ -599,12 +665,18 @@ class ItemEditor(QWidget):
             row = QHBoxLayout()
             label = QLabel(f"{field}:")
             label.setFixedWidth(130)
-            line = QLineEdit()
-            if field == "Name":
-                line.setMaxLength(13)
-            self.fields[field] = line
+
+            if field == "Pocket":
+                widget = QComboBox()
+                widget.addItems(POCKET_OPTIONS)
+            else:
+                widget = QLineEdit()
+                if field == "Name":
+                    widget.setMaxLength(13)
+
+            self.fields[field] = widget
             row.addWidget(label)
-            row.addWidget(line)
+            row.addWidget(widget)
             right_layout.addLayout(row)
 
         right_layout.addWidget(QLabel("Description:"))
@@ -659,7 +731,14 @@ class ItemEditor(QWidget):
         item = self.data[idx]
 
         for field in self.headers[:-1] + self.extra_fields:
-            self.fields[field].setText(item.get(field, ""))
+            if field == "Pocket":
+                pocket_val = item.get("Pocket", "POCKET_ITEMS")
+                if pocket_val in POCKET_OPTIONS:
+                    self.fields["Pocket"].setCurrentIndex(POCKET_OPTIONS.index(pocket_val))
+                else:
+                    self.fields["Pocket"].setCurrentIndex(0)
+            else:
+                self.fields[field].setText(item.get(field, ""))
 
         desc_tag = item.get("Desc", "")
         desc = self.descriptions.get(desc_tag, "[ROM defined]")
@@ -672,7 +751,6 @@ class ItemEditor(QWidget):
                 QMessageBox.Yes | QMessageBox.No
             )
             if answer == QMessageBox.Yes:
-                # Just make it editable now; defer the extern patch to save_all()
                 self.desc_edit.setReadOnly(False)
             else:
                 self.desc_edit.setReadOnly(True)
@@ -705,8 +783,11 @@ class ItemEditor(QWidget):
         if self.selected_index >= 0:
             item = self.data[self.selected_index]
             for field in self.headers[:-1] + self.extra_fields:
-                item[field] = self.fields[field].text()
-        
+                if field == "Pocket":
+                    item[field] = self.fields[field].currentText()
+                else:
+                    item[field] = self.fields[field].text()
+            
             # do NOT overwrite the tag; just update text separately
             if self.selected_index >= 0:
                 item = self.data[self.selected_index]
@@ -758,6 +839,7 @@ class ItemEditor(QWidget):
             f.write("\n".join(lines))
 
         QMessageBox.information(self, "Saved", "Changes written to item_tables.c and item_descriptions.string")
+
     def apply_dark_theme(self):
         self.setStyleSheet("""
         QWidget {
@@ -789,6 +871,11 @@ class ItemEditor(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = ItemEditor()
-    window.show()
+    ico = QIcon(os.path.join(os.path.dirname(__file__), "CrazyItem.ico"))
+    app.setWindowIcon(ico)
+
+    select_window = CFRUSelectWindow()
+    select_window.setWindowIcon(ico)   # also apply to main window
+    select_window.show()
     sys.exit(app.exec())
+
